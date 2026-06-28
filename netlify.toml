@@ -1,6 +1,11 @@
 [build]
   publish = "."
 
+[[redirects]]
+  from = "/api/wc-live"
+  to = "/.netlify/functions/wc-live"
+  status = 200
+
 [functions]
   directory = "netlify/functions"
   node_bundler = "esbuild"

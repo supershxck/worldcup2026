@@ -1,0 +1,12 @@
+{
+  "name": "worldcup2026",
+  "private": true,
+  "scripts": {
+    "check": "node --check functions/api/wc-live.js && node --check js/live-scores.js",
+    "dev:cf": "wrangler pages dev .",
+    "deploy:cf": "wrangler pages deploy . --project-name=worldcup2026 --commit-dirty=true"
+  },
+  "devDependencies": {
+    "wrangler": "^3.99.0"
+  }
+}

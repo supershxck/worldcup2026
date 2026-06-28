@@ -1,0 +1,3 @@
+# Copy to .dev.vars for local `wrangler pages dev` (gitignored via .env pattern).
+# Production: Cloudflare Pages → Settings → Environment variables → FOOTBALL_DATA_KEY
+FOOTBALL_DATA_KEY=your_free_token_here
