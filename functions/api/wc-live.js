@@ -3,7 +3,7 @@
  * Same contract as netlify/functions/wc-live.js and api/wc_live.py.
  *
  * Set FOOTBALL_DATA_KEY in: Cloudflare dashboard → Pages → Settings → Environment variables
- * or: wrangler pages secret put FOOTBALL_DATA_KEY --project-name=worldcup2026
+ * or: wrangler pages secret put FOOTBALL_DATA_KEY --project-name=shxck-wc26
  */
 
 const API = "https://api.football-data.org/v4/competitions/WC/matches";
