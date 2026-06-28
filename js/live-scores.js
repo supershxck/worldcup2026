@@ -1,24 +1,20 @@
 /* ════════════════════════════════════════════════════════════════════════
-   live-scores.js — football-data.org live feed for the World Cup dashboard.
+   live-scores.js — football-data.org via /api/wc-live (Forge, Cloudflare, Netlify).
 
-   Design: a *decorator*, not a rewrite. The app already has a global loadData()
-   (worldcup26.ir) feeding state.matches → renderAll(). This file makes
-   football-data.org the PRIMARY source by wrapping loadData(): try football-data
-   first, fall back to the original feed, then to the embedded cache. It reuses the
-   app's own state model, computeAllStats(), and renderers. Reversible: delete this
-   file + its <script> tag and the app behaves exactly as before.
-
-   Cost control: polls our cached Netlify function (/.netlify/functions/wc-live),
-   never football-data.org directly. Fast (12s ≈ 5/min) only while a match is live;
-   idle (5 min) otherwise; paused entirely while the tab is hidden.
+   On Forge Run: hydrate cache → retry live fetch → always render.
    ════════════════════════════════════════════════════════════════════════ */
 (function () {
   "use strict";
+  if (window.WC_LOCAL === true || location.protocol === "file:") {
+    window.__wcLivePolling = false;
+    return;
+  }
+  window.__wcLivePolling = true;
 
-  var FN_URL = "/.netlify/functions/wc-live";
-  var FAST_MS = 12000;    // ~5 calls/min — live windows only
-  var IDLE_MS = 300000;   // 5 min — nothing in play
-  var WAKE_MS = 800;      // quick refresh when tab regains focus
+  var FN_URL = window.WC_LIVE_URL || "/api/wc-live";
+  var WAKE_MS = 800;
+  var MAX_ATTEMPTS = 6;
+  var RETRY_MS = 500;
 
   var STAGE_MAP = {
     GROUP_STAGE: "group", LEAGUE_STAGE: "group",
@@ -27,9 +23,20 @@
     THIRD_PLACE: "third", FINAL: "final"
   };
 
-  function pad(n) { return String(n).padStart(2, "0"); }
+  var FD_NAME_ALIASES = {
+    "Czechia": "Czech Republic",
+    "Bosnia-Herzegovina": "Bosnia & Herz.",
+    "Cape Verde Islands": "Cape Verde",
+    "Côte d'Ivoire": "Ivory Coast",
+    "Korea Republic": "South Korea",
+    "IR Iran": "Iran"
+  };
 
-  // ISO (UTC) → 'MM/DD/YYYY HH:MM' in the viewer's local time (what isToday/fmtDate expect).
+  var TLA_ALIASES = { URY: "URU", CUR: "CUW" };
+
+  function pad(n) { return String(n).padStart(2, "0"); }
+  function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+
   function toLocalStamp(iso) {
     var d = new Date(iso);
     return pad(d.getMonth() + 1) + "/" + pad(d.getDate()) + "/" + d.getFullYear() +
@@ -38,97 +45,211 @@
 
   function groupLetter(g) { return g ? String(g).replace(/GROUP[_\s]?/i, "").trim() : ""; }
 
-  // Resolve a football-data team to one of the app's team ids; create a flag-bearing
-  // synthetic entry if the app doesn't know it yet, so cards still render cleanly.
-  function ensureTeam(tla, name) {
+  function staticTeamId(tla, name) {
+    if (typeof T === "undefined") return null;
+    if (tla) {
+      var code = TLA_ALIASES[tla] || tla;
+      for (var id in T) {
+        if (T[id] && T[id].c === code) return id;
+      }
+    }
+    var alias = FD_NAME_ALIASES[name] || name;
+    for (var id in T) {
+      if (T[id] && (T[id].n === alias || T[id].n === name)) return id;
+    }
+    return null;
+  }
+
+  function seedTeams() {
+    if (typeof T === "undefined") return;
     var teams = state.teams || (state.teams = {});
+    for (var id in T) {
+      if (!teams[id]) teams[id] = T[id];
+    }
+  }
+
+  function ensureTeam(tla, name) {
+    seedTeams();
+    var teams = state.teams;
+    var sid = staticTeamId(tla, name);
+    if (sid) return sid;
     for (var id in teams) {
       if (teams[id] && (teams[id].c === tla || teams[id].n === name)) return id;
     }
     var newId = "fd-" + (tla || name);
+    var code = TLA_ALIASES[tla] || tla;
     teams[newId] = {
       n: name || tla || "TBD",
-      c: tla || "—",
-      f: (typeof FLAGS !== "undefined" && FLAGS[tla]) || "🏳️",
+      c: code || "—",
+      f: (typeof FLAGS !== "undefined" && FLAGS[code]) || "🏳️",
       g: "?"
     };
     return newId;
   }
 
-  // football-data match → the app's match shape. (No scorers/cards on the free tier.)
+  function isTbdName(name) {
+    return !name || name === "TBD" || /^tbd$/i.test(name);
+  }
+
   function toAppMatch(m) {
     var finished = m.status === "FINISHED";
+    var g = groupLetter(m.group);
+    var homeTbd = !m.homeTla && isTbdName(m.homeName);
+    var awayTbd = !m.awayTla && isTbdName(m.awayName);
     return {
       id: "fd-" + m.id,
       local_date: toLocalStamp(m.utcDate),
+      _utcDate: m.utcDate,
       finished: finished ? "TRUE" : false,
-      home_team_id: ensureTeam(m.homeTla, m.homeName),
-      away_team_id: ensureTeam(m.awayTla, m.awayName),
+      home_team_id: homeTbd ? "0" : ensureTeam(m.homeTla, m.homeName),
+      away_team_id: awayTbd ? "0" : ensureTeam(m.awayTla, m.awayName),
       home_score: m.homeScore == null ? 0 : m.homeScore,
       away_score: m.awayScore == null ? 0 : m.awayScore,
       home_scorers: null,
       away_scorers: null,
       type: STAGE_MAP[m.stage] || "group",
-      group: groupLetter(m.group),
-      _status: m.status
+      group: g,
+      _status: m.status,
+      home_team_name_en: m.homeName,
+      away_team_name_en: m.awayName
     };
   }
 
-  function anyLive(raw) {
-    return raw.some(function (m) { return m._status === "IN_PLAY" || m._status === "PAUSED"; });
+  function applyLiveMatches(raw) {
+    var appMatches = raw.map(toAppMatch);
+    appMatches.forEach(function (m) {
+      var t = state.teams[m.home_team_id];
+      if (t && m.group) t.g = m.group;
+      t = state.teams[m.away_team_id];
+      if (t && m.group) t.g = m.group;
+    });
+    state.matches = appMatches;
+    state.dataSource = "live";
+    state.lastFetchAt = Date.now();
+    state.lastUpdated = new Date();
+    state._loadFailed = false;
+    computeAllStats();
+    try { persistCache(); } catch (e) {}
+    updateHeaderStats();
+    renderAll();
   }
 
-  var lastLive = false;
+  function hydrateFromCache() {
+    if (typeof loadEmbeddedCache !== "function") return false;
+    if (loadEmbeddedCache() && state.matches.length) {
+      if (!state.computed.gameStats.length) computeAllStats();
+      updateHeaderStats();
+      renderAll();
+      return true;
+    }
+    return false;
+  }
+
+  async function fetchLivePayload() {
+    var bust = Date.now();
+    var r = await fetch(FN_URL + "?_=" + bust, { cache: "no-store" });
+    if (!r.ok) return null;
+    return r.json();
+  }
 
   async function loadFootballData() {
     try {
-      var r = await fetch(FN_URL, { cache: "no-store" });
-      if (!r.ok) return false;
-      var data = await r.json();
+      var data = await fetchLivePayload();
       if (!data || data.source !== "football-data" ||
-          !Array.isArray(data.matches) || !data.matches.length) return false;
-
-      var appMatches = data.matches.map(toAppMatch);
-      lastLive = anyLive(appMatches);
-      state.matches = appMatches;
-      state.dataSource = "live";
-      computeAllStats();
-      try { persistCache(); } catch (e) {}
-      updateHeaderStats();
-      renderAll();
+          !Array.isArray(data.matches) || !data.matches.length) {
+        return false;
+      }
+      applyLiveMatches(data.matches);
       return true;
     } catch (e) {
       return false;
     }
   }
 
-  // --- Decorator: football-data primary, original feed as fallback ----------------
+  async function loadFootballDataWithRetry(force) {
+    var attempts = force ? MAX_ATTEMPTS : 2;
+    for (var i = 0; i < attempts; i++) {
+      if (await loadFootballData()) return true;
+      if (i < attempts - 1) await sleep(RETRY_MS * (i + 1));
+    }
+    return false;
+  }
+
   var _origLoadData = (typeof loadData === "function") ? loadData : null;
   loadData = async function (force) {
-    var ok = await loadFootballData();
+    var ok = await loadFootballDataWithRetry(!!force);
     if (ok) return;
-    if (_origLoadData) return _origLoadData(force);
+
+    if (!state.matches.length) hydrateFromCache();
+
+    if (!state.matches.length && _origLoadData) {
+      await _origLoadData(force);
+    }
+
+    if (!state.matches.length) {
+      state.dataSource = "static";
+      state._loadFailed = true;
+    }
+    updateHeaderStats();
+    renderAll();
   };
 
-  // --- Adaptive polling -----------------------------------------------------------
   var timer = null;
-  function schedule(ms) { clearTimeout(timer); timer = setTimeout(tick, ms); }
+  function schedule(ms) {
+    clearTimeout(timer);
+    timer = setTimeout(tick, ms);
+  }
+
+  window.__wcScheduleSync = function () {
+    schedule(pollMs());
+  };
+
   function tick() {
-    if (document.hidden) { schedule(IDLE_MS); return; }   // don't poll a hidden tab
-    Promise.resolve(loadData()).finally(function () {
-      schedule(lastLive ? FAST_MS : IDLE_MS);
+    if (document.hidden) {
+      schedule(300000);
+      return;
+    }
+    Promise.resolve(loadData(false)).finally(function () {
+      schedule(pollMs());
     });
   }
 
   document.addEventListener("visibilitychange", function () {
-    if (!document.hidden) schedule(WAKE_MS);
+    if (!document.hidden) {
+      loadData(false).finally(function () { schedule(WAKE_MS); });
+    }
   });
 
-  function start() {
-    Promise.resolve(loadData()).finally(function () {
-      schedule(lastLive ? FAST_MS : IDLE_MS);
-    });
+  function purgeEmbeddedBlob() {
+    var el = document.getElementById("wc-embedded-cache");
+    if (el && el.textContent && el.textContent.length > 4) el.textContent = "{}";
   }
+
+  async function start() {
+    window.__wcLivePollingStarted = true;
+    purgeEmbeddedBlob();
+    seedTeams();
+
+    if (typeof startOfDay === "function" && !state.viewDate) {
+      state.viewDate = startOfDay(new Date());
+    }
+    if (state.curDayKey === null || state.curDayKey === undefined) {
+      var now = new Date();
+      state.curDayKey = pad(now.getMonth() + 1) + "/" + pad(now.getDate()) + "/" + now.getFullYear();
+    }
+
+    var upd = document.getElementById("upd");
+    if (upd) upd.textContent = "Fetching live scores…";
+
+    // Instant paint from last good snapshot while server finishes booting.
+    if (!state.matches.length) hydrateFromCache();
+
+    if (typeof renderToday === "function" && !state.matches.length) renderToday();
+
+    await loadData(true);
+    schedule(pollMs());
+  }
+
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", start);
   } else {
