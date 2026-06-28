@@ -1,8 +1,85 @@
 # worldcup2026 — Deploy Runbook (live scores)
 
+**Primary host:** Cloudflare Pages (`functions/api/wc-live.js` + static site).  
+**Legacy:** Netlify still supported via `netlify/functions/wc-live.js`.
+
 Pre-verified 2026-06-14. The live-score feature is additive and reversible: it's one new
-JS file, one Netlify function, and a single `<script>` tag. Removing them restores the
+JS file, one edge function, and a single `<script>` tag. Removing them restores the
 prior behavior exactly.
+
+## Cloudflare Pages (recommended)
+
+### 1. Auth (do not paste tokens in chat)
+```bash
+# Option A — OAuth (preferred)
+npx wrangler login
+
+# Option B — API token with "Cloudflare Pages:Edit" scope only
+export CLOUDFLARE_API_TOKEN="..."   # in your shell only, never commit
+```
+
+### 2. Install + smoke check
+```bash
+cd ~/ANQ/product/worldcup2026
+npm install
+npm run check
+cp .dev.vars.example .dev.vars   # optional local dev — add FOOTBALL_DATA_KEY
+npx wrangler pages dev .         # http://localhost:8788 — Today tab
+```
+
+### 3. Create project (once)
+```bash
+npx wrangler pages project create worldcup2026 --production-branch main
+```
+
+### 4. Set the football-data key (production)
+```bash
+npx wrangler pages secret put FOOTBALL_DATA_KEY --project-name=worldcup2026
+# paste token when prompted — from https://www.football-data.org/client/register
+```
+
+Or: Cloudflare dashboard → Workers & Pages → worldcup2026 → Settings → Environment variables.
+
+### 5. Deploy
+```bash
+npm run deploy:cf
+# → https://worldcup2026.pages.dev (or your custom domain)
+```
+
+### 6. Post-deploy smoke test
+- Open production URL → **Today** tab → scores render.
+- `curl -s https://worldcup2026.pages.dev/api/wc-live | head -c 200`
+  → `"source":"football-data"` (or `"none"` if key missing).
+- DevTools → Network: `/api/wc-live` returns `200`, `cache-control` ~12s.
+
+### 7. Custom domain (optional)
+Cloudflare dashboard → Pages → worldcup2026 → Custom domains → add e.g. `wc26.yourdomain.com`.
+
+---
+
+## GitHub auto-deploy (push → production)
+
+Every push to `main` runs `.github/workflows/deploy-cloudflare-pages.yml`.
+
+### One-time setup
+1. **Create Pages project** (if missing):
+   ```bash
+   npx wrangler pages project create worldcup2026 --production-branch main
+   ```
+2. **GitHub repo secrets** — [supershxck/worldcup2026 → Settings → Secrets](https://github.com/supershxck/worldcup2026/settings/secrets/actions):
+   | Secret | Value |
+   |---|---|
+   | `CLOUDFLARE_API_TOKEN` | Token with **Cloudflare Pages:Edit** (+ Account read) |
+   | `CLOUDFLARE_ACCOUNT_ID` | Cloudflare dashboard → Workers & Pages → right sidebar |
+3. **Pages env var** (live scores): Cloudflare → worldcup2026 → Settings → Variables → `FOOTBALL_DATA_KEY`
+4. Push to `main` — Actions tab shows deploy; production URL updates automatically.
+
+### Optional: Cloudflare Git integration (dashboard)
+Instead of Actions, connect the repo in Cloudflare dashboard → Create application → Pages → Connect to Git → `supershxck/worldcup2026`, branch `main`, build output `.`, no build command. Use **either** Actions **or** dashboard Git — not both unless you intend duplicate deploys.
+
+---
+
+## Netlify (legacy)
 
 ## Preflight — already verified ✓
 - `node --check` passes on `netlify/functions/wc-live.js` and `js/live-scores.js`.
@@ -23,7 +100,7 @@ prior behavior exactly.
 ## 2. Test locally before shipping (recommended)
 The function only runs under Netlify's runtime, not a plain file-open:
 ```bash
-cd ~/Projects/worldcup2026
+cd ~/ANQ/worldcup2026
 npm i -g netlify-cli      # once
 netlify dev               # serves site + function with .env loaded
 ```
