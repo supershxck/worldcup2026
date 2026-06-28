@@ -1,7 +1,10 @@
 # worldcup2026 — Deploy Runbook (live scores)
 
 **Primary host:** Cloudflare Pages (`functions/api/wc-live.js` + static site).  
+**Production URL:** https://shxck-wc26.pages.dev  
 **Legacy:** Netlify still supported via `netlify/functions/wc-live.js`.
+
+> Note: `worldcup2026.pages.dev` is occupied by an unrelated site — we use project name `shxck-wc26`.
 
 Pre-verified 2026-06-14. The live-score feature is additive and reversible: it's one new
 JS file, one edge function, and a single `<script>` tag. Removing them restores the
@@ -29,31 +32,31 @@ npx wrangler pages dev .         # http://localhost:8788 — Today tab
 
 ### 3. Create project (once)
 ```bash
-npx wrangler pages project create worldcup2026 --production-branch main
+npx wrangler pages project create shxck-wc26 --production-branch main
 ```
 
 ### 4. Set the football-data key (production)
 ```bash
-npx wrangler pages secret put FOOTBALL_DATA_KEY --project-name=worldcup2026
+npx wrangler pages secret put FOOTBALL_DATA_KEY --project-name=shxck-wc26
 # paste token when prompted — from https://www.football-data.org/client/register
 ```
 
-Or: Cloudflare dashboard → Workers & Pages → worldcup2026 → Settings → Environment variables.
+Or: Cloudflare dashboard → Workers & Pages → shxck-wc26 → Settings → Environment variables.
 
 ### 5. Deploy
 ```bash
 npm run deploy:cf
-# → https://worldcup2026.pages.dev (or your custom domain)
+# → https://shxck-wc26.pages.dev (or your custom domain)
 ```
 
 ### 6. Post-deploy smoke test
 - Open production URL → **Today** tab → scores render.
-- `curl -s https://worldcup2026.pages.dev/api/wc-live | head -c 200`
+- `curl -s https://shxck-wc26.pages.dev/api/wc-live | head -c 200`
   → `"source":"football-data"` (or `"none"` if key missing).
 - DevTools → Network: `/api/wc-live` returns `200`, `cache-control` ~12s.
 
 ### 7. Custom domain (optional)
-Cloudflare dashboard → Pages → worldcup2026 → Custom domains → add e.g. `wc26.yourdomain.com`.
+Cloudflare dashboard → Pages → shxck-wc26 → Custom domains → add e.g. `wc26.yourdomain.com`.
 
 ---
 
@@ -64,14 +67,14 @@ Every push to `main` runs `.github/workflows/deploy-cloudflare-pages.yml`.
 ### One-time setup
 1. **Create Pages project** (if missing):
    ```bash
-   npx wrangler pages project create worldcup2026 --production-branch main
+   npx wrangler pages project create shxck-wc26 --production-branch main
    ```
 2. **GitHub repo secrets** — [supershxck/worldcup2026 → Settings → Secrets](https://github.com/supershxck/worldcup2026/settings/secrets/actions):
    | Secret | Value |
    |---|---|
    | `CLOUDFLARE_API_TOKEN` | Token with **Cloudflare Pages:Edit** (+ Account read) |
    | `CLOUDFLARE_ACCOUNT_ID` | Cloudflare dashboard → Workers & Pages → right sidebar |
-3. **Pages env var** (live scores): Cloudflare → worldcup2026 → Settings → Variables → `FOOTBALL_DATA_KEY`
+3. **Pages env var** (live scores): Cloudflare → shxck-wc26 → Settings → Variables → `FOOTBALL_DATA_KEY`
 4. Push to `main` — Actions tab shows deploy; production URL updates automatically.
 
 ### Optional: Cloudflare Git integration (dashboard)
